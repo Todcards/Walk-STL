@@ -1,0 +1,1467 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Walk STL</title>
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0a0a1a;
+            color: #fff;
+            overflow: hidden;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        /* ── Map ── */
+        #map { width: 100%; height: 100%; }
+
+        /* ── Top Bar ── */
+        #topbar {
+            position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+            z-index: 100; display: flex; gap: 8px;
+            background: rgba(10,10,26,0.85); backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 8px;
+        }
+        #addressInput {
+            width: 320px; padding: 10px 16px;
+            background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; color: #fff; font-size: 14px; outline: none;
+        }
+        #addressInput:focus { border-color: #3B82F6; }
+        #addressInput::placeholder { color: #666; }
+        #goBtn {
+            padding: 10px 20px; background: #3B82F6; border: none;
+            border-radius: 8px; color: #fff; font-size: 14px;
+            font-weight: 600; cursor: pointer; white-space: nowrap;
+        }
+        #goBtn:hover { background: #2563EB; }
+        #goBtn:disabled { background: #555; cursor: wait; }
+
+        /* ── Click Overlay ── */
+        #clickOverlay {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(10,10,26,0.8); backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 12px; padding: 24px 32px;
+            text-align: center; z-index: 50; pointer-events: none;
+        }
+        #clickOverlay h2 { font-size: 18px; margin-bottom: 8px; }
+        #clickOverlay p { font-size: 13px; color: #888; }
+
+        /* ── Crosshair ── */
+        #crosshair {
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none; z-index: 50;
+            display: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(255,255,255,0.6);
+        }
+        #crosshair::before {
+            width: 16px; height: 2px;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #crosshair::after {
+            width: 2px; height: 16px;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        /* ── HUD ── */
+        #hud {
+            position: fixed; bottom: 16px; left: 16px;
+            background: rgba(10,10,26,0.7); backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+            padding: 12px 16px; font-size: 12px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            color: #aaa; z-index: 50; line-height: 1.8;
+        }
+
+        /* ── Stamina Bar ── */
+        #staminaWrap {
+            position: fixed; bottom: 16px; left: 50%;
+            transform: translateX(-50%);
+            width: 200px; z-index: 50;
+            display: none;
+        }
+        #staminaLabel {
+            font-size: 10px; color: #888;
+            text-transform: uppercase; letter-spacing: 1px;
+            margin-bottom: 4px; text-align: center;
+        }
+        #staminaTrack {
+            width: 100%; height: 6px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 3px; overflow: hidden;
+        }
+        #staminaBar {
+            width: 100%; height: 100%;
+            background: linear-gradient(90deg, #22c55e, #4ade80);
+            border-radius: 3px;
+            transition: width 0.1s linear, background 0.3s;
+        }
+        #staminaBar.low {
+            background: linear-gradient(90deg, #ef4444, #f87171);
+        }
+        #staminaBar.recharging {
+            background: linear-gradient(90deg, #f59e0b, #fbbf24);
+        }
+
+        /* ── Sprint Vignette ── */
+        #sprintVignette {
+            position: fixed; inset: 0;
+            pointer-events: none; z-index: 40;
+            opacity: 0;
+            transition: opacity 0.3s;
+            background: radial-gradient(ellipse at center,
+                transparent 50%,
+                rgba(0,0,0,0.4) 100%
+            );
+        }
+
+        /* ── Controls Help ── */
+        #controlsHelp {
+            position: fixed; bottom: 16px; right: 16px;
+            background: rgba(10,10,26,0.7); backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+            padding: 12px 16px; font-size: 12px;
+            color: #888; z-index: 50; line-height: 2; display: none;
+        }
+        .key {
+            display: inline-block; background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+            padding: 1px 6px; font-family: monospace; font-size: 11px; color: #ccc;
+        }
+
+        /* ── Player Marker ── */
+        .player-marker {
+            display: flex; flex-direction: column; align-items: center;
+            pointer-events: none;
+        }
+        .player-arrow {
+            width: 0; height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-bottom: 9px solid #fff;
+            margin-bottom: 1px;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+        }
+        .player-dot {
+            width: 16px; height: 16px;
+            background: #3B82F6;
+            border: 2.5px solid #fff;
+            border-radius: 50%;
+            box-shadow:
+                0 0 0 2px rgba(59,130,246,0.25),
+                0 0 10px rgba(59,130,246,0.4),
+                0 2px 4px rgba(0,0,0,0.35);
+            transition: background 0.3s, box-shadow 0.3s;
+        }
+        .player-marker.in-car .player-arrow { display: none; }
+        .player-marker.in-car .player-dot {
+            width: auto; height: auto;
+            background: none;
+            border: none;
+            border-radius: 0;
+            box-shadow: none;
+            font-size: 22px;
+            line-height: 1;
+            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+        }
+
+        /* ── Start Menu ── */
+        #startMenu {
+            position: fixed; inset: 0;
+            z-index: 200;
+            display: flex; align-items: center; justify-content: center;
+            background: rgba(6,6,18,0.92);
+            backdrop-filter: blur(20px);
+        }
+        #startMenu.hidden { display: none; }
+        .menu-card {
+            width: 420px; max-width: 92vw;
+            background: rgba(18,18,36,0.95);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 16px;
+            padding: 36px 32px 28px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        }
+        .menu-title {
+            font-size: 32px; font-weight: 700;
+            text-align: center; margin-bottom: 4px;
+            letter-spacing: -0.5px;
+        }
+        .menu-subtitle {
+            font-size: 13px; color: #666;
+            text-align: center; margin-bottom: 28px;
+        }
+        .menu-section {
+            margin-bottom: 20px;
+        }
+        .menu-section-label {
+            font-size: 10px; color: #555;
+            text-transform: uppercase; letter-spacing: 1.5px;
+            margin-bottom: 10px;
+        }
+        .menu-row {
+            display: flex; align-items: center; gap: 12px;
+            margin-bottom: 8px;
+        }
+        .menu-row label {
+            flex: 0 0 110px; font-size: 13px; color: #999;
+        }
+        .menu-row input[type="range"] {
+            flex: 1; accent-color: #3B82F6; height: 4px;
+        }
+        .menu-row .range-val {
+            flex: 0 0 40px; font-size: 12px; color: #666;
+            text-align: right;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+        .menu-address {
+            display: flex; gap: 8px; margin-bottom: 8px;
+        }
+        .menu-address input {
+            flex: 1; padding: 10px 14px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 8px; color: #fff; font-size: 14px; outline: none;
+        }
+        .menu-address input:focus { border-color: #3B82F6; }
+        .menu-address input::placeholder { color: #555; }
+        .menu-address button {
+            padding: 10px 18px; background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.1); border-radius: 8px;
+            color: #ccc; font-size: 13px; cursor: pointer; white-space: nowrap;
+        }
+        .menu-address button:hover { background: rgba(255,255,255,0.12); }
+        .menu-style-toggle {
+            display: flex; gap: 8px; margin-bottom: 8px;
+        }
+        .menu-style-toggle button {
+            flex: 1; padding: 8px; border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background: rgba(255,255,255,0.04);
+            color: #888; font-size: 13px; cursor: pointer;
+            transition: all 0.2s;
+        }
+        .menu-style-toggle button.active {
+            background: rgba(59,130,246,0.15);
+            border-color: #3B82F6;
+            color: #fff;
+        }
+        .menu-style-toggle button:hover { background: rgba(255,255,255,0.08); }
+        .menu-controls {
+            display: grid; grid-template-columns: auto 1fr; gap: 4px 12px;
+            font-size: 12px; color: #666;
+        }
+        .menu-controls .key {
+            justify-self: end;
+        }
+        #playBtn {
+            display: block; width: 100%;
+            padding: 14px; margin-top: 24px;
+            background: #3B82F6; border: none; border-radius: 10px;
+            color: #fff; font-size: 16px; font-weight: 600;
+            cursor: pointer; letter-spacing: 0.5px;
+            transition: background 0.2s;
+        }
+        #playBtn:hover { background: #2563EB; }
+
+        /* ── Attribution ── */
+        .maplibregl-ctrl-attrib { font-size: 10px !important; }
+    </style>
+</head>
+<body>
+
+<!-- Start Menu -->
+<div id="startMenu">
+    <div class="menu-card">
+        <div class="menu-title">🚶 Walk STL</div>
+        <div class="menu-subtitle">Explore any city at street level</div>
+
+        <div class="menu-section">
+            <div class="menu-section-label">Starting Location</div>
+            <div class="menu-address">
+                <input type="text" id="menuAddress" placeholder="Enter an address…" autocomplete="off">
+                <button id="menuGoBtn">Set</button>
+            </div>
+            <div class="menu-section">
+    <button id="randomSpawnBtn" style="width:100%; padding:10px; border-radius:8px; background:#3B82F6; color:#fff; font-weight:600; cursor:pointer;">
+        🎲 Random Spawn
+    </button>
+</div>
+
+            
+        </div>
+        
+        
+        
+        
+
+        <div class="menu-section">
+            <div class="menu-section-label">Map Style</div>
+            <div class="menu-style-toggle">
+                <button id="styleSatellite" class="active">🛰️ Satellite</button>
+                <button id="styleStreet">🗺️ Street</button>
+            </div>
+        </div>
+
+        <div class="menu-section">
+            <div class="menu-section-label">Settings</div>
+            <div class="menu-row">
+                <label>Walk Speed</label>
+                <input type="range" id="setWalk" min="0.5" max="4" step="0.1" value="1.4">
+                <span class="range-val" id="valWalk">1.4</span>
+            </div>
+            <div class="menu-row">
+                <label>Sprint Speed</label>
+                <input type="range" id="setSprint" min="2" max="10" step="0.5" value="4.5">
+                <span class="range-val" id="valSprint">4.5</span>
+            </div>
+            <div class="menu-row">
+                <label>Car Speed</label>
+                <input type="range" id="setCar" min="5" max="25" step="1" value="11">
+                <span class="range-val" id="valCar">11</span>
+            </div>
+            <div class="menu-row">
+                <label>Mouse Sensitivity</label>
+                <input type="range" id="setSens" min="0.05" max="0.6" step="0.05" value="0.25">
+                <span class="range-val" id="valSens">0.25</span>
+            </div>
+            <div class="menu-row">
+                <label>Zoom Level</label>
+                <input type="range" id="setZoom" min="16" max="19.5" step="0.1" value="17.8">
+                <span class="range-val" id="valZoom">17.8</span>
+            </div>
+        </div>
+
+        <div class="menu-section">
+            <div class="menu-section-label">Controls</div>
+            <div class="menu-controls">
+                <span><span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span></span><span>Move</span>
+                <span class="key">Mouse</span><span>Look around</span>
+                <span class="key">Scroll</span><span>Zoom in / out</span>
+                <span class="key">Shift</span><span>Sprint</span>
+                <span class="key">Esc</span><span>Release cursor</span>
+            </div>
+        </div>
+
+        <button id="playBtn">▶ Play</button>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<!-- Top Bar -->
+<div id="topbar" style="display:none">
+    <input type="text" id="addressInput" placeholder="Enter an address…" autocomplete="off">
+    <button id="goBtn">Go</button>
+</div>
+
+<!-- Click Overlay -->
+<div id="clickOverlay" style="display:none">
+    <h2>Click to explore</h2>
+    <p>WASD to move · Mouse to look · Shift to sprint · Scroll to zoom</p>
+</div>
+
+<div id="crosshair"></div>
+
+<!-- Sprint Vignette -->
+<div id="sprintVignette"></div>
+
+<!-- Stamina Bar -->
+<div id="staminaWrap">
+    <div id="staminaLabel">stamina</div>
+    <div id="staminaTrack">
+        <div id="staminaBar"></div>
+    </div>
+</div>
+
+<!-- HUD -->
+<div id="hud">
+    <div id="coordsDisplay">—</div>
+</div>
+
+<!-- Controls Help -->
+<div id="controlsHelp">
+    <span class="key">W</span><span class="key">A</span><span class="key">S</span><span class="key">D</span> Move<br>
+    <span class="key">Mouse</span> Look around<br>
+    <span class="key">Scroll</span> Zoom in/out<br>
+    <span class="key">Shift</span> Sprint<br>
+    <span class="key">Esc</span> Release cursor
+</div>
+
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script>
+// ═══════════════════════════════════════════
+//  Configuration
+// ═══════════════════════════════════════════
+const CONFIG = {
+    startLocation: { lng: -90.1994, lat: 38.6270 },
+
+    walkSpeed: 1.4,         // m/s (~3 mph, normal human walk)
+    sprintSpeed: 4.5,       // m/s (~10 mph, jogging/running)
+    carSpeed: 11,           // m/s (~25 mph, driving on road)
+    lookSensitivity: 0.25,  // degrees per pixel (horizontal)
+    pitchSensitivity: 0.12, // degrees per pixel (vertical)
+    zoomSensitivity: 0.003,
+
+    defaultZoom: 17.8,
+    minZoom: 16,
+    maxZoom: 19.5,
+    defaultPitch: 68,
+    minPitch: 40,
+    maxPitch: 80,
+
+    // Sprint / stamina
+    maxStamina: 100,
+    staminaDrain: 20,       // per second while sprinting
+    staminaRegen: 12,       // per second while not sprinting
+    staminaMinToSprint: 10, // minimum to start sprinting
+    sprintFovBump: 0.35,    // zoom reduction when sprinting (wider FOV)
+    fovLerpSpeed: 5,        // how fast FOV transitions
+
+    // Third-person camera offset
+    camOffsetMeters: 3,     // meters behind the player
+
+    // NPC traffic
+    maxCars: 18,
+    maxPeds: 8,
+    carSpeedMin: 6,         // m/s (~13 mph)
+    carSpeedMax: 12,        // m/s (~27 mph)
+    pedSpeedMin: 0.8,
+    pedSpeedMax: 1.5,
+    npcSpawnInterval: 0.6,  // seconds between spawn attempts
+    npcDespawnDist: 0.004,  // ~400m in degrees
+};
+
+// ═══════════════════════════════════════════
+//  State
+// ═══════════════════════════════════════════
+let playerLng = CONFIG.startLocation.lng;
+let playerLat = CONFIG.startLocation.lat;
+let playerHeading = 0;
+
+let cameraBearing = 0;
+let cameraPitch = CONFIG.defaultPitch;
+let cameraZoom = CONFIG.defaultZoom;
+let baseZoom = CONFIG.defaultZoom;      // zoom before sprint FOV offset
+
+let isMoving = false;
+let isSprinting = false;
+let playerOnRoad = false;
+let stamina = CONFIG.maxStamina;
+let staminaExhausted = false;
+let pointerLocked = false;
+let mapReady = false;
+const keys = {};
+let lastTime = performance.now();
+
+// NPCs
+const npcs = [];
+let npcSpawnTimer = 0;
+
+// DOM refs
+const staminaWrap = document.getElementById('staminaWrap');
+const staminaBar  = document.getElementById('staminaBar');
+const sprintVignette = document.getElementById('sprintVignette');
+
+// ═══════════════════════════════════════════
+//  Map
+// ═══════════════════════════════════════════
+const map = new maplibregl.Map({
+    container: 'map',
+    style: {
+        version: 8,
+        sources: {
+            'satellite': {
+                type: 'raster',
+                tiles: [
+                    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+                ],
+                tileSize: 256,
+                maxzoom: 19,
+                attribution: '&copy; Esri, Maxar, Earthstar Geographics',
+            },
+            'openmaptiles': {
+                type: 'vector',
+                url: 'https://tiles.openfreemap.org/planet',
+                attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>',
+            },
+        },
+        layers: [
+            {
+                id: 'satellite-base',
+                type: 'raster',
+                source: 'satellite',
+                paint: { 'raster-brightness-max': 0.95 },
+            },
+        ],
+    },
+    center: [playerLng, playerLat],
+    zoom: cameraZoom,
+    pitch: cameraPitch,
+    bearing: cameraBearing,
+    antialias: true,
+    maxPitch: CONFIG.maxPitch,
+    attributionControl: true,
+});
+
+// ═══════════════════════════════════════════
+//  3D Buildings
+// ═══════════════════════════════════════════
+map.on('load', () => {
+    // 3D Buildings
+    map.addLayer({
+        id: '3d-buildings',
+        source: 'openmaptiles',
+        'source-layer': 'building',
+        type: 'fill-extrusion',
+        minzoom: 14,
+        paint: {
+            'fill-extrusion-color': [
+                'interpolate', ['linear'],
+                ['coalesce', ['get', 'render_height'], 8],
+                0,   '#e8e4e0',
+                30,  '#d4d0cc',
+                80,  '#c0bcb8',
+                200, '#a8a4a0',
+            ],
+            'fill-extrusion-height': [
+                'interpolate', ['linear'], ['zoom'],
+                14, 0,
+                15.5, ['coalesce', ['get', 'render_height'], 8],
+            ],
+            'fill-extrusion-base': [
+                'interpolate', ['linear'], ['zoom'],
+                14, 0,
+                15.5, ['coalesce', ['get', 'render_min_height'], 0],
+            ],
+            'fill-extrusion-opacity': 0.85,
+        },
+    });
+
+    map.setLight({
+        anchor: 'viewport',
+        color: '#fffff0',
+        intensity: 0.4,
+        position: [1.5, 210, 30],
+    });
+
+    // Roads (subtle overlay for detection + visual aid on satellite)
+    map.addLayer({
+        id: 'roads',
+        source: 'openmaptiles',
+        'source-layer': 'transportation',
+        type: 'line',
+        minzoom: 14,
+        filter: ['in', ['get', 'class'],
+            ['literal', ['motorway','trunk','primary','secondary','tertiary','minor','service','street']]
+        ],
+        paint: {
+            'line-color': 'rgba(255,255,255,0.25)',
+            'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 17, 8, 19, 14],
+        },
+    }, '3d-buildings');
+
+    // NPC sources and layers
+    map.addSource('npcs', {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+    });
+
+    map.addLayer({
+        id: 'npc-cars',
+        source: 'npcs',
+        type: 'circle',
+        filter: ['==', ['get', 'type'], 'car'],
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 16, 3, 19, 6],
+            'circle-color': '#fbbf24',
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 1.5,
+        },
+    });
+
+    map.addLayer({
+        id: 'npc-peds',
+        source: 'npcs',
+        type: 'circle',
+        filter: ['==', ['get', 'type'], 'ped'],
+        paint: {
+            'circle-radius': ['interpolate', ['linear'], ['zoom'], 16, 2, 19, 4],
+            'circle-color': '#22c55e',
+            'circle-stroke-color': '#fff',
+            'circle-stroke-width': 1,
+        },
+    });
+
+    mapReady = true;
+});
+
+// ═══════════════════════════════════════════
+//  Player Marker
+// ═══════════════════════════════════════════
+const playerEl = document.createElement('div');
+playerEl.className = 'player-marker';
+playerEl.innerHTML = '<div class="player-arrow"></div><div class="player-dot"></div>';
+
+const marker = new maplibregl.Marker({
+    element: playerEl,
+    rotationAlignment: 'map',
+    pitchAlignment: 'viewport',
+    anchor: 'center',
+})
+    .setLngLat([playerLng, playerLat])
+    .setRotation(playerHeading)
+    .addTo(map);
+
+// ═══════════════════════════════════════════
+//  Input Controls
+// ═══════════════════════════════════════════
+document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT') return;
+    keys[e.code] = true;
+});
+document.addEventListener('keyup', e => {
+    keys[e.code] = false;
+});
+
+// Pointer lock
+const canvas = map.getCanvas();
+canvas.addEventListener('click', () => {
+    if (!pointerLocked) canvas.requestPointerLock();
+});
+
+document.addEventListener('pointerlockchange', () => {
+    pointerLocked = (document.pointerLockElement === canvas);
+
+    document.getElementById('clickOverlay').style.display  = pointerLocked ? 'none'  : 'block';
+    document.getElementById('crosshair').style.display     = pointerLocked ? 'block' : 'none';
+    document.getElementById('controlsHelp').style.display  = pointerLocked ? 'block' : 'none';
+    staminaWrap.style.display = pointerLocked ? 'block' : 'none';
+
+    if (pointerLocked) {
+        cameraBearing = map.getBearing();
+        cameraPitch   = map.getPitch();
+        cameraZoom    = map.getZoom();
+        baseZoom      = cameraZoom;
+
+        map.dragPan.disable();
+        map.dragRotate.disable();
+        map.scrollZoom.disable();
+        map.doubleClickZoom.disable();
+        map.touchZoomRotate.disable();
+
+        map.easeTo({
+            center: [playerLng, playerLat],
+            bearing: cameraBearing,
+            pitch: cameraPitch,
+            zoom: cameraZoom,
+            duration: 400,
+        });
+    } else {
+        map.dragPan.enable();
+        map.dragRotate.enable();
+        map.scrollZoom.enable();
+        map.doubleClickZoom.enable();
+        map.touchZoomRotate.enable();
+    }
+});
+
+// Mouse look
+document.addEventListener('mousemove', e => {
+    if (!pointerLocked) return;
+    cameraBearing += e.movementX * CONFIG.lookSensitivity;
+    cameraPitch   -= e.movementY * CONFIG.pitchSensitivity;
+    cameraPitch    = Math.max(CONFIG.minPitch, Math.min(CONFIG.maxPitch, cameraPitch));
+});
+
+// Scroll zoom
+document.addEventListener('wheel', e => {
+    if (!pointerLocked) return;
+    if (e.target.tagName === 'INPUT') return;
+    baseZoom -= e.deltaY * CONFIG.zoomSensitivity;
+    baseZoom  = Math.max(CONFIG.minZoom, Math.min(CONFIG.maxZoom, baseZoom));
+}, { passive: true });
+
+// Address bar
+document.getElementById('addressInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') goToAddress();
+});
+document.getElementById('goBtn').addEventListener('click', goToAddress);
+
+// ═══════════════════════════════════════════
+//  Start Menu
+// ═══════════════════════════════════════════
+let mapStyle = 'satellite'; // 'satellite' | 'street'
+
+// Slider bindings
+const sliders = [
+    { id: 'setWalk',   val: 'valWalk',   key: 'walkSpeed',        fmt: v => v.toFixed(1) },
+    { id: 'setSprint', val: 'valSprint', key: 'sprintSpeed',      fmt: v => v.toFixed(1) },
+    { id: 'setCar',    val: 'valCar',    key: 'carSpeed',         fmt: v => v.toFixed(0) },
+    { id: 'setSens',   val: 'valSens',   key: 'lookSensitivity',  fmt: v => v.toFixed(2) },
+    { id: 'setZoom',   val: 'valZoom',   key: 'defaultZoom',      fmt: v => v.toFixed(1) },
+];
+for (const s of sliders) {
+    const input = document.getElementById(s.id);
+    const display = document.getElementById(s.val);
+    input.addEventListener('input', () => {
+        const v = parseFloat(input.value);
+        CONFIG[s.key] = v;
+        display.textContent = s.fmt(v);
+        if (s.key === 'defaultZoom') {
+            baseZoom = v;
+            cameraZoom = v;
+        }
+    });
+}
+
+// Map style toggle
+document.getElementById('styleSatellite').addEventListener('click', () => {
+    mapStyle = 'satellite';
+    document.getElementById('styleSatellite').classList.add('active');
+    document.getElementById('styleStreet').classList.remove('active');
+});
+document.getElementById('styleStreet').addEventListener('click', () => {
+    mapStyle = 'street';
+    document.getElementById('styleStreet').classList.add('active');
+    document.getElementById('styleSatellite').classList.remove('active');
+});
+
+// Menu address geocode
+document.getElementById('menuAddress').addEventListener('keydown', e => {
+    if (e.key === 'Enter') menuGeocode();
+});
+document.getElementById('menuGoBtn').addEventListener('click', menuGeocode);
+
+async function menuGeocode() {
+    const input = document.getElementById('menuAddress');
+    const btn = document.getElementById('menuGoBtn');
+    const address = input.value.trim();
+    if (!address) return;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+        const url = 'https://nominatim.openstreetmap.org/search?' +
+            `q=${encodeURIComponent(address)}&format=json&limit=1`;
+        const resp = await fetch(url, { headers: { 'User-Agent': 'WalkSTL/1.0' } });
+        const results = await resp.json();
+        if (results.length === 0) { alert('Address not found.'); return; }
+        playerLng = parseFloat(results[0].lon);
+        playerLat = parseFloat(results[0].lat);
+        marker.setLngLat([playerLng, playerLat]);
+        map.jumpTo({ center: [playerLng, playerLat], zoom: cameraZoom, pitch: cameraPitch });
+        input.value = results[0].display_name.split(',').slice(0, 3).join(',');
+    } catch { alert('Geocoding failed.'); }
+    finally { btn.disabled = false; btn.textContent = 'Set'; }
+}
+
+// Play button
+document.getElementById('playBtn').addEventListener('click', () => {
+    // Apply map style if changed
+    if (mapStyle === 'street') {
+        map.setStyle('https://tiles.openfreemap.org/styles/liberty');
+        // Re-add layers after style loads
+        map.once('style.load', () => {
+            const sources = map.getStyle().sources;
+            const sourceId = Object.keys(sources).find(k =>
+                sources[k].type === 'vector'
+            ) || 'openmaptiles';
+            addGameLayers(sourceId);
+        });
+    }
+
+    document.getElementById('startMenu').classList.add('hidden');
+    document.getElementById('topbar').style.display = 'flex';
+    document.getElementById('clickOverlay').style.display = 'block';
+});
+
+function addGameLayers(sourceId) {
+    if (!map.getLayer('3d-buildings')) {
+        map.addLayer({
+            id: '3d-buildings',
+            source: sourceId,
+            'source-layer': 'building',
+            type: 'fill-extrusion',
+            minzoom: 14,
+            paint: {
+                'fill-extrusion-color': [
+                    'interpolate', ['linear'],
+                    ['coalesce', ['get', 'render_height'], 8],
+                    0, '#e8e4e0', 30, '#d4d0cc', 80, '#c0bcb8', 200, '#a8a4a0',
+                ],
+                'fill-extrusion-height': [
+                    'interpolate', ['linear'], ['zoom'],
+                    14, 0, 15.5, ['coalesce', ['get', 'render_height'], 8],
+                ],
+                'fill-extrusion-base': [
+                    'interpolate', ['linear'], ['zoom'],
+                    14, 0, 15.5, ['coalesce', ['get', 'render_min_height'], 0],
+                ],
+                'fill-extrusion-opacity': 0.85,
+            },
+        });
+    }
+    if (!map.getLayer('roads')) {
+        map.addLayer({
+            id: 'roads',
+            source: sourceId,
+            'source-layer': 'transportation',
+            type: 'line',
+            minzoom: 14,
+            filter: ['in', ['get', 'class'],
+                ['literal', ['motorway','trunk','primary','secondary','tertiary','minor','service','street']]
+            ],
+            paint: {
+                'line-color': 'rgba(255,255,255,0.25)',
+                'line-width': ['interpolate', ['linear'], ['zoom'], 14, 3, 17, 8, 19, 14],
+            },
+        }, '3d-buildings');
+    }
+    if (!map.getSource('npcs')) {
+        map.addSource('npcs', {
+            type: 'geojson',
+            data: { type: 'FeatureCollection', features: [] },
+        });
+    }
+    if (!map.getLayer('npc-cars')) {
+        map.addLayer({
+            id: 'npc-cars', source: 'npcs', type: 'circle',
+            filter: ['==', ['get', 'type'], 'car'],
+            paint: {
+                'circle-radius': ['interpolate', ['linear'], ['zoom'], 16, 3, 19, 6],
+                'circle-color': '#fbbf24',
+                'circle-stroke-color': '#fff', 'circle-stroke-width': 1.5,
+            },
+        });
+    }
+    if (!map.getLayer('npc-peds')) {
+        map.addLayer({
+            id: 'npc-peds', source: 'npcs', type: 'circle',
+            filter: ['==', ['get', 'type'], 'ped'],
+            paint: {
+                'circle-radius': ['interpolate', ['linear'], ['zoom'], 16, 2, 19, 4],
+                'circle-color': '#22c55e',
+                'circle-stroke-color': '#fff', 'circle-stroke-width': 1,
+            },
+        });
+    }
+    map.setLight({ anchor: 'viewport', color: '#fffff0', intensity: 0.4, position: [1.5, 210, 30] });
+    mapReady = true;
+}
+
+// ═══════════════════════════════════════════
+//  Game Loop
+// ═══════════════════════════════════════════
+function gameLoop() {
+    const now = performance.now();
+    const dt = Math.min((now - lastTime) / 1000, 0.1);
+    lastTime = now;
+
+    if (pointerLocked) {
+        updateSprint(dt);
+        updateMovement(dt);
+        updateCamera(dt);
+        if (mapReady) {
+            updateRoadStatus();
+            updateNPCs(dt);
+        }
+    }
+
+    updateHUD();
+    requestAnimationFrame(gameLoop);
+}
+requestAnimationFrame(gameLoop);
+
+// ═══════════════════════════════════════════
+//  Sprint & Stamina
+// ═══════════════════════════════════════════
+function updateSprint(dt) {
+    const wantsSprint = keys['ShiftLeft'] || keys['ShiftRight'];
+    const moving = keys['KeyW'] || keys['KeyS'] || keys['KeyA'] || keys['KeyD'];
+
+    // Can't sprint if exhausted until stamina recovers above threshold
+    if (staminaExhausted && stamina >= CONFIG.staminaMinToSprint) {
+        staminaExhausted = false;
+    }
+
+    isSprinting = wantsSprint && moving && !staminaExhausted && stamina > 0;
+
+    if (isSprinting) {
+        stamina -= CONFIG.staminaDrain * dt;
+        if (stamina <= 0) {
+            stamina = 0;
+            staminaExhausted = true;
+            isSprinting = false;
+        }
+    } else {
+        stamina += CONFIG.staminaRegen * dt;
+        if (stamina > CONFIG.maxStamina) stamina = CONFIG.maxStamina;
+    }
+
+    // Update stamina bar
+    const pct = (stamina / CONFIG.maxStamina) * 100;
+    staminaBar.style.width = pct + '%';
+    staminaBar.className = '';
+    if (staminaExhausted) {
+        staminaBar.classList.add('recharging');
+    } else if (pct < 25) {
+        staminaBar.classList.add('low');
+    }
+
+    // Sprint vignette
+    sprintVignette.style.opacity = isSprinting ? '1' : '0';
+}
+
+// ═══════════════════════════════════════════
+//  Movement
+// ═══════════════════════════════════════════
+function updateMovement(dt) {
+    const bearingRad = cameraBearing * Math.PI / 180;
+
+    const fwdLng   =  Math.sin(bearingRad);
+    const fwdLat   =  Math.cos(bearingRad);
+    const rightLng =  Math.cos(bearingRad);
+    const rightLat = -Math.sin(bearingRad);
+
+    let dLng = 0, dLat = 0;
+    if (keys['KeyW']) { dLng += fwdLng;   dLat += fwdLat; }
+    if (keys['KeyS']) { dLng -= fwdLng;   dLat -= fwdLat; }
+    if (keys['KeyA']) { dLng -= rightLng; dLat -= rightLat; }
+    if (keys['KeyD']) { dLng += rightLng; dLat += rightLat; }
+
+    const len = Math.sqrt(dLng * dLng + dLat * dLat);
+    isMoving = len > 0.001;
+    if (!isMoving) return;
+
+    dLng /= len;
+    dLat /= len;
+
+    let speed;
+    if (playerOnRoad) {
+        speed = CONFIG.carSpeed;
+    } else {
+        speed = isSprinting ? CONFIG.sprintSpeed : CONFIG.walkSpeed;
+    }
+    const R = 6371000;
+    const latRad = playerLat * Math.PI / 180;
+
+    playerLng += (dLng * speed * dt) / (R * Math.cos(latRad)) * (180 / Math.PI);
+    playerLat += (dLat * speed * dt) / R * (180 / Math.PI);
+
+    playerHeading = Math.atan2(dLng, dLat) * 180 / Math.PI;
+
+    // Update marker
+    marker.setLngLat([playerLng, playerLat]);
+    marker.setRotation(playerHeading);
+}
+
+// ═══════════════════════════════════════════
+//  Camera
+// ═══════════════════════════════════════════
+function updateCamera(dt) {
+    // Smoothly lerp zoom for sprint FOV effect
+    const targetZoom = isSprinting
+        ? baseZoom - CONFIG.sprintFovBump
+        : baseZoom;
+    cameraZoom += (targetZoom - cameraZoom) * Math.min(1, CONFIG.fovLerpSpeed * dt);
+
+    // Offset camera behind the player (third-person)
+    const bearingRad = cameraBearing * Math.PI / 180;
+    const R = 6371000;
+    const latRad = playerLat * Math.PI / 180;
+    const offsetDeg = CONFIG.camOffsetMeters / R * (180 / Math.PI);
+
+    const camLng = playerLng - Math.sin(bearingRad) * offsetDeg / Math.cos(latRad);
+    const camLat = playerLat - Math.cos(bearingRad) * offsetDeg;
+
+    map.jumpTo({
+        center: [camLng, camLat],
+        bearing: cameraBearing,
+        pitch: cameraPitch,
+        zoom: cameraZoom,
+    });
+}
+
+// ═══════════════════════════════════════════
+//  Road Detection + Player Color
+// ═══════════════════════════════════════════
+function updateRoadStatus() {
+    const point = map.project([playerLng, playerLat]);
+    const pad = 6;
+    const features = map.queryRenderedFeatures(
+        [[point.x - pad, point.y - pad], [point.x + pad, point.y + pad]],
+        { layers: ['roads'] }
+    );
+
+    const onRoad = features.length > 0;
+    if (onRoad !== playerOnRoad) {
+        playerOnRoad = onRoad;
+        playerEl.classList.toggle('in-car', onRoad);
+        const dot = playerEl.querySelector('.player-dot');
+        dot.textContent = onRoad ? '🚗' : '';
+    }
+}
+
+// ═══════════════════════════════════════════
+//  NPC Traffic
+// ═══════════════════════════════════════════
+
+// Utility: extract line coords from road geometry
+function getRoadLines(geometry) {
+    if (geometry.type === 'LineString') return [geometry.coordinates];
+    if (geometry.type === 'MultiLineString') return geometry.coordinates;
+    return [];
+}
+
+// Utility: offset a point perpendicular to a line segment (for sidewalks)
+function offsetPerpendicular(lng, lat, dLng, dLat, meters) {
+    const segLen = Math.sqrt(dLng * dLng + dLat * dLat);
+    if (segLen < 1e-10) return { lng, lat };
+    // Perpendicular direction (rotate 90°)
+    const perpLng = -dLat / segLen;
+    const perpLat =  dLng / segLen;
+    const R = 6371000;
+    const degPerMeter = (180 / Math.PI) / R;
+    const latRad = lat * Math.PI / 180;
+    return {
+        lng: lng + perpLng * meters * degPerMeter / Math.cos(latRad),
+        lat: lat + perpLat * meters * degPerMeter,
+    };
+}
+
+// Snap a point to the nearest position on the closest road line.
+// Returns { lng, lat, segDx, segDy } or null if no road found.
+function snapToNearestRoad(lng, lat, radius) {
+    const px = map.project([lng, lat]);
+    const nearby = map.queryRenderedFeatures(
+        [[px.x - radius, px.y - radius], [px.x + radius, px.y + radius]],
+        { layers: ['roads'] }
+    );
+    if (nearby.length === 0) return null;
+
+    let bestDist = Infinity;
+    let bestLng = lng, bestLat = lat, bestDx = 0, bestDy = 1;
+
+    for (const road of nearby) {
+        const lines = getRoadLines(road.geometry);
+        for (const line of lines) {
+            for (let i = 0; i < line.length - 1; i++) {
+                // Project point onto segment [line[i], line[i+1]]
+                const ax = line[i][0], ay = line[i][1];
+                const bx = line[i+1][0], by = line[i+1][1];
+                const abx = bx - ax, aby = by - ay;
+                const apx = lng - ax, apy = lat - ay;
+                const ab2 = abx * abx + aby * aby;
+                if (ab2 < 1e-20) continue;
+                const t = Math.max(0, Math.min(1, (apx * abx + apy * aby) / ab2));
+                const projLng = ax + t * abx;
+                const projLat = ay + t * aby;
+                const d = (projLng - lng) ** 2 + (projLat - lat) ** 2;
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestLng = projLng;
+                    bestLat = projLat;
+                    bestDx = abx;
+                    bestDy = aby;
+                }
+            }
+        }
+    }
+    return { lng: bestLng, lat: bestLat, segDx: bestDx, segDy: bestDy };
+}
+
+// Find a connecting road at an NPC's position and load new waypoints
+function findNextRoad(npc) {
+    const px = map.project([npc.lng, npc.lat]);
+    const searchR = 40;
+    const nearby = map.queryRenderedFeatures(
+        [[px.x - searchR, px.y - searchR], [px.x + searchR, px.y + searchR]],
+        { layers: ['roads'] }
+    );
+    if (nearby.length === 0) return false;
+
+    const headRad = npc.heading * Math.PI / 180;
+    const fwdLng = Math.sin(headRad);
+    const fwdLat = Math.cos(headRad);
+    let bestScore = -2;
+    let bestWaypoints = null;
+
+    for (const road of nearby) {
+        const lines = getRoadLines(road.geometry);
+        for (const line of lines) {
+            if (line.length < 2) continue;
+
+            let closestIdx = 0;
+            let closestDist = Infinity;
+            for (let i = 0; i < line.length; i++) {
+                const d = (line[i][0] - npc.lng) ** 2 + (line[i][1] - npc.lat) ** 2;
+                if (d < closestDist) {
+                    closestDist = d;
+                    closestIdx = i;
+                }
+            }
+
+            // Try forward
+            if (closestIdx < line.length - 1) {
+                const dx = line[closestIdx + 1][0] - line[closestIdx][0];
+                const dy = line[closestIdx + 1][1] - line[closestIdx][1];
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 0) {
+                    const dot = (dx / len) * fwdLng + (dy / len) * fwdLat;
+                    if (dot > bestScore) {
+                        bestScore = dot;
+                        bestWaypoints = line.slice(closestIdx + 1);
+                    }
+                }
+            }
+            // Try reverse
+            if (closestIdx > 0) {
+                const dx = line[closestIdx - 1][0] - line[closestIdx][0];
+                const dy = line[closestIdx - 1][1] - line[closestIdx][1];
+                const len = Math.sqrt(dx * dx + dy * dy);
+                if (len > 0) {
+                    const dot = (dx / len) * fwdLng + (dy / len) * fwdLat;
+                    if (dot > bestScore) {
+                        bestScore = dot;
+                        bestWaypoints = line.slice(0, closestIdx).reverse();
+                    }
+                }
+            }
+        }
+    }
+
+    if (bestWaypoints && bestWaypoints.length > 0 && bestScore > 0.1) {
+        npc.waypoints = bestWaypoints;
+        npc.wpIdx = 0;
+        return true;
+    }
+    return false;
+}
+
+function updateNPCs(dt) {
+    const R = 6371000;
+
+    for (const npc of npcs) {
+        if (npc.type === 'car') {
+            // If out of waypoints, try to find a connecting road
+            if (!npc.waypoints || npc.wpIdx >= npc.waypoints.length) {
+                if (!findNextRoad(npc)) {
+                    // No road found — mark for removal (don't go off-road)
+                    npc.remove = true;
+                    continue;
+                }
+            }
+
+            // Follow waypoints
+            const target = npc.waypoints[npc.wpIdx];
+            const dx = target[0] - npc.lng;
+            const dy = target[1] - npc.lat;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const stepDeg = (npc.speed * dt) / R * (180 / Math.PI);
+
+            if (dist < stepDeg * 1.5) {
+                npc.lng = target[0];
+                npc.lat = target[1];
+                npc.wpIdx++;
+                if (npc.wpIdx < npc.waypoints.length) {
+                    const nx = npc.waypoints[npc.wpIdx][0] - npc.lng;
+                    const ny = npc.waypoints[npc.wpIdx][1] - npc.lat;
+                    npc.heading = Math.atan2(nx, ny) * 180 / Math.PI;
+                }
+            } else {
+                const latRad = npc.lat * Math.PI / 180;
+                npc.lng += (dx / dist) * stepDeg / Math.cos(latRad);
+                npc.lat += (dy / dist) * stepDeg;
+                npc.heading = Math.atan2(dx, dy) * 180 / Math.PI;
+            }
+
+            // Snap car back onto road if it drifted off
+            npc._snapTimer = (npc._snapTimer || 0) + dt;
+            if (npc._snapTimer > 0.3) {
+                npc._snapTimer = 0;
+                const snap = snapToNearestRoad(npc.lng, npc.lat, 20);
+                if (snap) {
+                    npc.lng = snap.lng;
+                    npc.lat = snap.lat;
+                }
+            }
+        } else {
+            // Pedestrian — walk straight along sidewalk
+            const headingRad = npc.heading * Math.PI / 180;
+            const latRad = npc.lat * Math.PI / 180;
+            npc.lng += (Math.sin(headingRad) * npc.speed * dt) / (R * Math.cos(latRad)) * (180 / Math.PI);
+            npc.lat += (Math.cos(headingRad) * npc.speed * dt) / R * (180 / Math.PI);
+        }
+    }
+
+    // Remove NPCs that are off-screen or marked for removal
+    const canvasW = map.getCanvas().width;
+    const canvasH = map.getCanvas().height;
+    const pad = 300;
+    for (let i = npcs.length - 1; i >= 0; i--) {
+        if (npcs[i].remove) { npcs.splice(i, 1); continue; }
+        const px = map.project([npcs[i].lng, npcs[i].lat]);
+        if (px.x < -pad || px.x > canvasW + pad ||
+            px.y < -pad || px.y > canvasH + pad) {
+            npcs.splice(i, 1);
+        }
+    }
+
+    // Spawn new NPCs periodically
+    npcSpawnTimer -= dt;
+    if (npcSpawnTimer <= 0) {
+        npcSpawnTimer = CONFIG.npcSpawnInterval * (0.5 + Math.random());
+        spawnNPC();
+    }
+
+    // Push to map
+    updateNPCSource();
+}
+
+function spawnNPC() {
+    const numCars = npcs.filter(n => n.type === 'car').length;
+    const numPeds = npcs.filter(n => n.type === 'ped').length;
+    if (numCars >= CONFIG.maxCars && numPeds >= CONFIG.maxPeds) return;
+
+    // Query road segments near the player
+    const point = map.project([playerLng, playerLat]);
+    const r = 250;
+    const roads = map.queryRenderedFeatures(
+        [[point.x - r, point.y - r], [point.x + r, point.y + r]],
+        { layers: ['roads'] }
+    );
+    if (roads.length === 0) return;
+
+    const road = roads[Math.floor(Math.random() * roads.length)];
+    const lines = getRoadLines(road.geometry);
+    if (lines.length === 0) return;
+
+    const line = lines[Math.floor(Math.random() * lines.length)];
+    if (line.length < 2) return;
+
+    // Pick a random start segment
+    const segIdx = Math.floor(Math.random() * (line.length - 1));
+    const t = Math.random();
+    const spawnLng = line[segIdx][0] + t * (line[segIdx + 1][0] - line[segIdx][0]);
+    const spawnLat = line[segIdx][1] + t * (line[segIdx + 1][1] - line[segIdx][1]);
+
+    // Don't spawn on top of the player
+    const pdx = spawnLng - playerLng;
+    const pdy = spawnLat - playerLat;
+    if (Math.sqrt(pdx * pdx + pdy * pdy) < 0.00015) return;
+
+    const spawnCar = numCars < CONFIG.maxCars && (numPeds >= CONFIG.maxPeds || Math.random() < 0.7);
+
+    if (spawnCar) {
+        // CAR: follow road waypoints
+        const reverse = Math.random() < 0.5;
+        let waypoints;
+        if (reverse) {
+            waypoints = line.slice(0, segIdx + 1).reverse();
+        } else {
+            waypoints = line.slice(segIdx + 1);
+        }
+        if (waypoints.length === 0) return;
+
+        const dx = waypoints[0][0] - spawnLng;
+        const dy = waypoints[0][1] - spawnLat;
+        const heading = Math.atan2(dx, dy) * 180 / Math.PI;
+        const speed = CONFIG.carSpeedMin + Math.random() * (CONFIG.carSpeedMax - CONFIG.carSpeedMin);
+
+        npcs.push({
+            lng: spawnLng, lat: spawnLat,
+            heading, speed, type: 'car',
+            waypoints, wpIdx: 0,
+        });
+    } else {
+        // PEDESTRIAN: offset to sidewalk (3-5m from road center)
+        const dLng = line[segIdx + 1][0] - line[segIdx][0];
+        const dLat = line[segIdx + 1][1] - line[segIdx][1];
+        const sidewalkOffset = (3 + Math.random() * 2) * (Math.random() < 0.5 ? 1 : -1);
+        const pos = offsetPerpendicular(spawnLng, spawnLat, dLng, dLat, sidewalkOffset);
+
+        let heading = Math.atan2(dLng, dLat) * 180 / Math.PI;
+        if (Math.random() < 0.5) heading += 180;
+        const speed = CONFIG.pedSpeedMin + Math.random() * (CONFIG.pedSpeedMax - CONFIG.pedSpeedMin);
+
+        npcs.push({
+            lng: pos.lng, lat: pos.lat,
+            heading, speed, type: 'ped',
+        });
+    }
+}
+
+function updateNPCSource() {
+    const src = map.getSource('npcs');
+    if (!src) return;
+
+    const features = npcs.map(npc => ({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: [npc.lng, npc.lat] },
+        properties: { type: npc.type },
+    }));
+
+    src.setData({ type: 'FeatureCollection', features });
+}
+
+// ═══════════════════════════════════════════
+//  Geocoding (Nominatim — free, no key)
+// ═══════════════════════════════════════════
+async function goToAddress() {
+    const input = document.getElementById('addressInput');
+    const btn   = document.getElementById('goBtn');
+    const address = input.value.trim();
+    if (!address) return;
+
+    btn.disabled = true;
+    btn.textContent = '…';
+
+    try {
+        const url = 'https://nominatim.openstreetmap.org/search?' +
+            `q=${encodeURIComponent(address)}&format=json&limit=1`;
+        const resp = await fetch(url, {
+            headers: { 'User-Agent': 'WalkSTL/1.0' },
+        });
+        const results = await resp.json();
+
+        if (results.length === 0) {
+            alert('Address not found. Try a different search.');
+            return;
+        }
+
+        const lat = parseFloat(results[0].lat);
+        const lng = parseFloat(results[0].lon);
+
+        playerLng = lng;
+        playerLat = lat;
+        cameraBearing = 0;
+        cameraPitch = CONFIG.defaultPitch;
+        baseZoom = CONFIG.defaultZoom;
+        cameraZoom = CONFIG.defaultZoom;
+
+        // Clear NPCs when teleporting
+        npcs.length = 0;
+        updateNPCSource();
+
+        marker.setLngLat([playerLng, playerLat]);
+
+        map.flyTo({
+            center: [playerLng, playerLat],
+            bearing: cameraBearing,
+            pitch: cameraPitch,
+            zoom: cameraZoom,
+            duration: 2000,
+        });
+
+        input.value = results[0].display_name.split(',').slice(0, 3).join(',');
+    } catch (err) {
+        console.error('Geocoding failed:', err);
+        alert('Geocoding failed. Check your connection.');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Go';
+    }
+}
+
+// ═══════════════════════════════════════════
+//  HUD
+// ═══════════════════════════════════════════
+function updateHUD() {
+    const el = document.getElementById('coordsDisplay');
+    const headingDeg = ((playerHeading % 360) + 360) % 360;
+    const compass = getCompassDir(headingDeg);
+    let speed;
+    if (!isMoving) {
+        speed = '0';
+    } else if (playerOnRoad) {
+        speed = CONFIG.carSpeed.toFixed(0);
+    } else if (isSprinting) {
+        speed = CONFIG.sprintSpeed.toFixed(0);
+    } else {
+        speed = CONFIG.walkSpeed.toFixed(0);
+    }
+    const mode = playerOnRoad ? '🚗' : (isSprinting ? '🏃' : (isMoving ? '🚶' : '🧍'));
+
+    el.innerHTML =
+        `${playerLat.toFixed(5)}, ${playerLng.toFixed(5)}<br>` +
+        `${compass} ${headingDeg.toFixed(0)}° · ${mode} ${speed} m/s`;
+}
+
+function getCompassDir(deg) {
+    const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+    return dirs[Math.round(deg / 45) % 8];
+}
+
+
+
+
+
+
+
+
+document.getElementById('randomSpawnBtn').addEventListener('click', randomSpawn);
+
+function randomSpawn() {
+    const radiusMeters = 2000; // spawn within 2km from start location
+
+    const R = 6371000; // Earth radius in meters
+
+    const getRandomOffset = () => (Math.random() * 200 - 100); // between -1 and 1
+
+    // Random bearing and distance within radiusMeters circle
+    const bearing = Math.random() * 2 * Math.PI;
+    const distance = Math.random() * radiusMeters;
+
+    // Original start location (you can use CONFIG.startLocation or playerLat/Lng)
+    const lat1 = CONFIG.startLocation.lat * Math.PI / 180;
+    const lng1 = CONFIG.startLocation.lng * Math.PI / 180;
+
+    // Destination point calculation:
+    const lat2 = Math.asin(
+        Math.sin(lat1) * Math.cos(distance / R) +
+        Math.cos(lat1) * Math.sin(distance / R) * Math.cos(bearing)
+    );
+    const lng2 = lng1 + Math.atan2(
+        Math.sin(bearing) * Math.sin(distance / R) * Math.cos(lat1),
+        Math.cos(distance / R) - Math.sin(lat1) * Math.sin(lat2)
+    );
+
+    const newLat = lat2 * 180 / Math.PI;
+    const newLng = lng2 * 180 / Math.PI;
+
+    playerLat = newLat;
+    playerLng = newLng;
+
+    marker.setLngLat([playerLng, playerLat]);
+    map.jumpTo({center: [playerLng, playerLat], zoom: cameraZoom, pitch: cameraPitch});
+
+    // Clear NPCs when teleporting
+    npcs.length = 0;
+    updateNPCSource();
+
+    // Update address input with random spawn coordinates (optional)
+    document.getElementById('menuAddress').value = `Random location: ${newLat.toFixed(5)}, ${newLng.toFixed(5)}`;
+}
+
+
+
+
+
+
+</script>
+</body>
+</html>
